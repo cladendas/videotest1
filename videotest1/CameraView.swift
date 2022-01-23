@@ -10,7 +10,7 @@ import AVFoundation
 
 struct CameraView: View {
     
-    @StateObject var camera = CameraModel()
+    @StateObject var camera: CameraModel = CameraModel()
     
     var body: some View {
         ZStack {

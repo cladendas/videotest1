@@ -12,10 +12,13 @@ import Photos
 class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate {
     
     private var backgroundRecordingID: UIBackgroundTaskIdentifier?
+    private var selectedMovieMode1: AVCaptureDevice.Format?
+    ///необходимая частота кадров
+    private var frameRate: Double = 120.0
     
-    @Published var isTaken = false
+    @Published var isTaken: Bool = false
     @Published var session = AVCaptureSession()
-    @Published var alert = false
+    @Published var alert: Bool = false
     @Published var output = AVCaptureMovieFileOutput()
     @Published var preview: AVCaptureVideoPreviewLayer!
 
@@ -44,27 +47,43 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AV
         }
     }
     
+    ///настройки камеры: устройство, тип данных, частота кадров
     func setup() {
-        //setting up camera
         do {
+            ///выбор устройства захвата: тип устройства, тип данных, положение устройства
+            guard let device = AVCaptureDevice.default( .builtInWideAngleCamera, for: .video, position: .back) else { return }
+            
+            ///блокировка устройства для его найстройки
+            try device.lockForConfiguration()
+            
+            ///используется для группировки нескольких операций найстроки сессии
             self.session.beginConfiguration()
             
-            ///выбор устройства захвата: тип устройства, тип данных, положение устройства
-            let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
-            
             ///устройство, с которого необходимо захватить ввод
-            let input = try AVCaptureDeviceInput(device: device!)
+            let input = try AVCaptureDeviceInput(device: device)
             
-            //checking and adding to session
+            ///определение допустимости входа для данной сессии и его добавление
             if self.session.canAddInput(input) {
                 self.session.addInput(input)
             }
 
+            ///определение допустимости вывода для данной сессии и его добавление
             if self.session.canAddOutput(output) {
                 self.session.addOutput(output)
             }
             
+            ///получаем доступные форматы и ищем среди них с частотой кадров >= 120, затем найденный формат назначаем устройству
+            for (_, format) in device.formats.enumerated() {
+ 
+                guard let test = format.videoSupportedFrameRateRanges.last else { return }
+                
+                if test.maxFrameRate >= frameRate {
+                    device.activeFormat = format
+                }
+            }
+
             self.session.commitConfiguration()
+            device.unlockForConfiguration()
             
         } catch {
             print(error.localizedDescription)
@@ -76,6 +95,10 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AV
             // Start recording video to a temporary file.
             let outputFileName = NSUUID().uuidString
             let outputFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent((outputFileName as NSString).appendingPathExtension("mov")!)
+            
+            //ограничение длительности видео
+//            self.output.maxRecordedDuration = CMTime(seconds: 3.0, preferredTimescale: .max)
+            
             self.output.startRecording(to: URL(fileURLWithPath: outputFilePath), recordingDelegate: self)
             
             DispatchQueue.main.async {
@@ -143,7 +166,6 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AV
         } else {
             cleanup()
         }
-        
         print("видео записано !!!!!", outputFileURL)
     }
 }
