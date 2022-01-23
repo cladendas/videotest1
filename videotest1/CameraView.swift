@@ -20,54 +20,27 @@ struct CameraView: View {
                 .ignoresSafeArea(.all, edges: .all)
             
             VStack {
-                
-                if camera.isTaken {
-                    
-                    HStack {
-                        
-                        Spacer()
-                        
-                        Button {
-                            camera.reTake()
-                        } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath.camera")
-                                .foregroundColor(.black)
-                                .padding()
-                                .background(Color.white)
-                                .clipShape(Circle())
-                        }
-                        .padding(.trailing, 10)
-                    }
-                }
-                
                 Spacer()
-                
                 HStack {
                     
-                    //if taken showing save and again take button
-                    
                     if camera.isTaken {
-                        
                         Button {
-                            if !camera.isSaved {
-                                camera.savePic()
-                            }
+                            camera.stopRecording()
+                            camera.isTaken.toggle()
                         } label: {
-                            Text(camera.isSaved ? "Saved" : "Save")
-                                .foregroundColor(.black)
-                                .fontWeight(.semibold)
-                                .padding(.vertical, 10)
-                                .padding(.horizontal, 20)
-                                .background(Color.white)
-                                .clipShape(Capsule())
-                        }
-                        .padding(.leading)
+                            ZStack {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 65, height: 65)
 
-                        Spacer()
+                                Circle()
+                                    .stroke(Color.red)
+                                    .frame(width: 75, height: 75)
+                            }
+                        }
                     } else {
-                        
                         Button {
-                            camera.takePic()
+                            camera.startRecording()
                         } label: {
                             ZStack {
                                 Circle()

@@ -7,32 +7,27 @@
 
 import SwiftUI
 import AVFoundation
+import Photos
 
-///Camera Model
-class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
+class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate {
+    
+    private var backgroundRecordingID: UIBackgroundTaskIdentifier?
+    
     @Published var isTaken = false
     @Published var session = AVCaptureSession()
     @Published var alert = false
-    
-    //since were going to read pic data
-    @Published var output = AVCapturePhotoOutput()
-    
-    @Published var outputQ = AVCaptureMovieFileOutput()
-    
-    //preview
+    @Published var output = AVCaptureMovieFileOutput()
     @Published var preview: AVCaptureVideoPreviewLayer!
-    
-    @Published var isSaved = false
-    @Published var picData = Data(count: 0)
-    
+
     ///проверка доступности камеры
     func check() {
-        //first checking camera has got permission
+        //есть ли у приложения разрешение на запись указанного типа носителя
         switch AVCaptureDevice.authorizationStatus(for: .video) {
+        //Пользователь явно предоставил разрешение на захват мультимедиа, или явное разрешение пользователя не требуется для рассматриваемого типа мультимедиа
         case .authorized:
             setup()
             return
-            //Setting Up Session
+        //Для захвата мультимедиа требуется явное разрешение пользователя, но пользователь еще не предоставил или не отклонил такое разрешение
         case .notDetermined:
             //requesting for permission
             AVCaptureDevice.requestAccess(for: .video) { status in
@@ -40,6 +35,7 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
                     self.setup()
                 }
             }
+        //пользователь отказал в разрешении на захват мультимедиа
         case .denied:
             self.alert.toggle()
             return
@@ -53,16 +49,17 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
         do {
             self.session.beginConfiguration()
             
+            ///выбор устройства захвата: тип устройства, тип данных, положение устройства
             let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
             
+            ///устройство, с которого необходимо захватить ввод
             let input = try AVCaptureDeviceInput(device: device!)
             
             //checking and adding to session
             if self.session.canAddInput(input) {
                 self.session.addInput(input)
             }
-            
-            //same for output
+
             if self.session.canAddOutput(output) {
                 self.session.addOutput(output)
             }
@@ -74,12 +71,12 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
         }
     }
     
-    //take and retake functions
-    func takePic() {
+    func startRecording() {
         DispatchQueue.global(qos: .background).async {
-            self.output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
-            
-            self.session.stopRunning()
+            // Start recording video to a temporary file.
+            let outputFileName = NSUUID().uuidString
+            let outputFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent((outputFileName as NSString).appendingPathExtension("mov")!)
+            self.output.startRecording(to: URL(fileURLWithPath: outputFilePath), recordingDelegate: self)
             
             DispatchQueue.main.async {
                 withAnimation {
@@ -89,40 +86,64 @@ class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
         }
     }
     
-    func reTake() {
-        DispatchQueue.global(qos: .background).async {
-            self.session.startRunning()
-            
-            DispatchQueue.main.async {
-                withAnimation {
-                    self.isTaken.toggle()
+    func stopRecording() {
+        self.output.stopRecording()
+    }
+    
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        //т.к. используется уникальный путь к файлу для каждой записи, новая запись не перезапишет запись в процессе сохранения
+        func cleanup() {
+            let path = outputFileURL.path
+            if FileManager.default.fileExists(atPath: path) {
+                do {
+                    try FileManager.default.removeItem(atPath: path)
+                } catch {
+                    print("Could not remove file at url: \(outputFileURL)")
                 }
+            }
+            
+            if let currentBackgroundRecordingID = backgroundRecordingID {
+                backgroundRecordingID = UIBackgroundTaskIdentifier.invalid
                 
-                //clearing
-                self.isSaved = false
+                if currentBackgroundRecordingID != UIBackgroundTaskIdentifier.invalid {
+                    UIApplication.shared.endBackgroundTask(currentBackgroundRecordingID)
+                }
             }
         }
-    }
-    
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        
+        var success = true
+        
         if error != nil {
-            return
+            print("Movie file finishing error: \(String(describing: error))")
+            success = (((error! as NSError).userInfo[AVErrorRecordingSuccessfullyFinishedKey] as AnyObject).boolValue)!
         }
         
-        print("pic taken...")
+        if success {
+            // Check the authorization status
+            PHPhotoLibrary.requestAuthorization { status in
+                if status == .authorized {
+                    // Save the movie file to the photo library and cleanup
+                    PHPhotoLibrary.shared().performChanges({
+                        let options = PHAssetResourceCreationOptions()
+                        options.shouldMoveFile = true
+                        
+                        let creationRequest = PHAssetCreationRequest.forAsset()
+                        creationRequest.addResource(with: .video, fileURL: outputFileURL, options: options)
+                    }, completionHandler: { success, error in
+                        if !success {
+                            print("AVCam couldn't save the movie to your photo library: \(String(describing: error))")
+                        }
+                        cleanup()
+                    }
+                    )
+                } else {
+                    cleanup()
+                }
+            }
+        } else {
+            cleanup()
+        }
         
-        guard let imageData = photo.fileDataRepresentation() else { return }
-        
-        self.picData = imageData
-    }
-    
-    func savePic() {
-        let image = UIImage(data: self.picData)!
-        
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        
-        self.isSaved = true
-        
-        print("saved Successfully...")
+        print("видео записано !!!!!", outputFileURL)
     }
 }
